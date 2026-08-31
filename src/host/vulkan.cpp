@@ -80,6 +80,352 @@ static bool rd_create_instance(Application *app) {
   return true;
 }
 
+static bool rd_create_physical_device(Application *app) {
+  Renderer *rd = &app->renderer;
+
+  rd->graphic_queue_index = UINT32_MAX;
+  rd->inflight_count = MAX_FRAMES_IN_FLIGHT;
+
+  // @physical device
+  VkPhysicalDeviceVulkan11Features vulkan11_features = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+      .shaderDrawParameters = true};
+  VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extended_dynamic_state_features =
+      {.sType =
+           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
+       .pNext = &vulkan11_features};
+  VkPhysicalDeviceVulkan13Features vulkan13_features = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+      .pNext = &extended_dynamic_state_features};
+  VkPhysicalDeviceFeatures2 device_features = (VkPhysicalDeviceFeatures2){
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &vulkan13_features,
+      .features = {.samplerAnisotropy = true},
+  };
+  const char *required_device_extension_names[] = {
+      VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+  const u32 required_device_extension_count =
+      sizeof(required_device_extension_names) /
+      sizeof(required_device_extension_names[0]);
+  {
+    ArenaTemp scratch = arena_temp_begin(app->scratch_arena);
+    u32 physical_device_count = 0;
+    VKTRY(
+        vkEnumeratePhysicalDevices(app->instance, &physical_device_count, NULL),
+        "Vulkan error: no physical device found");
+    VkPhysicalDevice *physical_devices = ARENA_PUSH_ARRAY(
+        scratch.arena, physical_device_count, VkPhysicalDevice);
+
+    VKTRY(vkEnumeratePhysicalDevices(app->instance, &physical_device_count,
+                                     physical_devices),
+          "Vulkan error: failed to enumerate physical devices");
+    app->physical_device = physical_devices[0];
+
+    // verify 1.3 support
+    VkPhysicalDeviceProperties2 physical_device_properties = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    vkGetPhysicalDeviceProperties2(app->physical_device,
+                                   &physical_device_properties);
+    if (physical_device_properties.properties.apiVersion < VK_API_VERSION_1_3) {
+      fprintf(stderr, "Vulkan error: physical device do not support 1.3.");
+      rd_cleanup(app);
+      return false;
+    }
+
+    // verify graphic queue
+    u32 physical_device_queue_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(
+        app->physical_device, &physical_device_queue_count, NULL);
+    VkQueueFamilyProperties *physical_device_queue_properties =
+        ARENA_PUSH_ARRAY(scratch.arena, physical_device_queue_count,
+                         VkQueueFamilyProperties);
+    vkGetPhysicalDeviceQueueFamilyProperties(app->physical_device,
+                                             &physical_device_queue_count,
+                                             physical_device_queue_properties);
+
+    // graphic queue index
+    VkBool32 supports_surface = false;
+    for (u32 i = 0; i < physical_device_queue_count; ++i) {
+      VKTRY(vkGetPhysicalDeviceSurfaceSupportKHR(
+                app->physical_device, i, app->surface, &supports_surface),
+            "Vulkan error: unable to test if physical device");
+      if (physical_device_queue_properties[i].queueFlags &
+              VK_QUEUE_GRAPHICS_BIT &&
+          supports_surface) {
+        app->graphic_queue_index = i;
+        break;
+      }
+    }
+    if (app->graphic_queue_index == UINT32_MAX) {
+      fprintf(stderr,
+              "Vulkan error: physical device does not support graphic queue\n");
+      rd_cleanup(app);
+      return false;
+    }
+
+    // transfer queue index
+    for (u32 i = 0; i < physical_device_queue_count; ++i) {
+      if (i != app->graphic_queue_index &&
+          physical_device_queue_properties[i].queueFlags &
+              VK_QUEUE_TRANSFER_BIT) {
+        app->transfer_queue_index = i;
+        break;
+      }
+    }
+    if (app->transfer_queue_index == UINT32_MAX) {
+      printf("Unable to find another queue than graphic for transfer.\n");
+      app->transfer_queue_index = app->graphic_queue_index;
+    }
+
+    // verify swapchain extension
+    u32 extension_count = 0;
+    vkEnumerateDeviceExtensionProperties(app->physical_device, NULL,
+                                         &extension_count, NULL);
+    VkExtensionProperties *extension_properties =
+        ARENA_PUSH_ARRAY(scratch.arena, extension_count, VkExtensionProperties);
+    vkEnumerateDeviceExtensionProperties(
+        app->physical_device, NULL, &extension_count, extension_properties);
+
+    bool supports_swapchain = false;
+    for (u32 i = 0; i < required_device_extension_count; i++) {
+      if (has_extension(extension_count, extension_properties,
+                        required_device_extension_names[i])) {
+        supports_swapchain = true;
+        break;
+      }
+    }
+    if (!supports_swapchain) {
+      fprintf(stderr,
+              "Vulkan error: physical device does not support swapchain\n");
+      rd_cleanup(app);
+      return false;
+    }
+
+    // verify dynamic rendering feature
+    vkGetPhysicalDeviceFeatures2(app->physical_device, &device_features);
+
+    if (!vulkan13_features.dynamicRendering ||
+        !extended_dynamic_state_features.extendedDynamicState) {
+      fprintf(stderr,
+              "Vulkan error: physical device does not dynamic rendering\n");
+      rd_cleanup(app);
+      return false;
+    }
+
+    printf("vk::PhysicalDevice created\n");
+    arena_temp_end(scratch);
+  }
+
+  // @logical device
+  {
+    f32 queue_priority = 1.f;
+    VkDeviceQueueCreateInfo device_queue_info[2] = {
+        {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+         .queueCount = 1,
+         .pQueuePriorities = &queue_priority,
+         .queueFamilyIndex = app->graphic_queue_index},
+        {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+         .queueCount = 1,
+         .pQueuePriorities = &queue_priority,
+         .queueFamilyIndex = app->transfer_queue_index},
+    };
+    VkDeviceCreateInfo device_info = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = &device_features,
+        .queueCreateInfoCount =
+            app->graphic_queue_index == app->transfer_queue_index ? 1 : 2,
+        .pQueueCreateInfos = device_queue_info,
+        .enabledExtensionCount = required_device_extension_count,
+        .ppEnabledExtensionNames = required_device_extension_names};
+    VKTRY(
+        vkCreateDevice(app->physical_device, &device_info, NULL, &app->device),
+        "Vulkan error: failed to create logical device");
+    vkGetDeviceQueue(app->device, app->graphic_queue_index, 0,
+                     &app->graphic_queue);
+    vkGetDeviceQueue(app->device, app->transfer_queue_index, 0,
+                     &app->transfer_queue);
+
+    printf("vk::LogicalDevice (and queue handle) created\n");
+  }
+
+  // @swapchain
+  ArenaTemp swapchain_scratch = arena_temp_begin(app->scratch_arena);
+  swapchain_init(swapchain_scratch.arena, app);
+  arena_temp_end(swapchain_scratch);
+  printf("vk::Swapchain (and images) created\n");
+  printf("vk::ImageView (for swapchain) created\n");
+
+  // @descriptor set layout
+  {
+    VkDescriptorSetLayoutBinding bindings[2] = {
+        {.binding = 0,
+         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+         .descriptorCount = 1,
+         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT},
+        {.binding = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         .descriptorCount = 1,
+         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT}};
+    VkDescriptorSetLayoutCreateInfo layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 2,
+        .pBindings = bindings};
+    VKTRY(vkCreateDescriptorSetLayout(app->device, &layout_info, NULL,
+                                      &app->descriptor_set_layout),
+          "Vulkan error: Failed to create ubo descriptor set layout");
+  }
+
+  // @depth
+  depth_buffer_init(app);
+
+  // @render pipeline
+
+  // @command pool & buffer
+  {
+    VkCommandPoolCreateInfo pool_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = app->graphic_queue_index};
+    VKTRY(vkCreateCommandPool(app->device, &pool_info, NULL,
+                              &app->graphic_command_pool),
+          "Vulkan error: Failed to create graphic command pool");
+
+    VkCommandBufferAllocateInfo alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = app->graphic_command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = app->inflight_count};
+
+    app->graphic_command_buffers = ARENA_PUSH_ARRAY(
+        app->vulkan_arena, app->inflight_count, VkCommandBuffer);
+    VKTRY(vkAllocateCommandBuffers(app->device, &alloc_info,
+                                   app->graphic_command_buffers),
+          "Vulkan error: Failed to allocate graphic command buffers");
+
+    VkCommandPoolCreateInfo transfer_pool_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = app->transfer_queue_index};
+    VKTRY(vkCreateCommandPool(app->device, &transfer_pool_info, NULL,
+                              &app->transfer_command_pool),
+          "Vulkan error: Failed to create transfer command pool");
+
+    VkCommandBufferAllocateInfo transfer_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = app->transfer_command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1};
+    VKTRY(vkAllocateCommandBuffers(app->device, &transfer_alloc_info,
+                                   &app->transfer_command_buffer),
+          "Vulkan error: Failed to allocate transfer command buffer");
+  }
+
+  // @buffer (vertex & index & instance)
+  {
+    // device local
+    ArenaTemp temp = arena_temp_begin(app->scratch_arena);
+    VkDeviceSize vertex_size = sizeof(vertices[0]) * vertices_count;
+    VkDeviceSize index_size = sizeof(indices[0]) * indices_count;
+    VkDeviceSize geometry_size = vertex_size + index_size;
+
+    app->vertex_offset = 0;
+    app->index_offset = vertex_size;
+
+    u8 *geometry_array = ARENA_PUSH_ARRAY(temp.arena, geometry_size, u8);
+    memcpy(geometry_array + app->vertex_offset, vertices, vertex_size);
+    memcpy(geometry_array + app->index_offset, indices, index_size);
+
+    if (!upload_device_local_array(app, geometry_array, geometry_size,
+                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                                       VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                   &app->geometry_buffer,
+                                   &app->geometry_memory)) {
+      return false;
+    }
+
+    // host visible + keep map memory
+    VkDeviceSize instance_size =
+        sizeof(app->quad_list.data[0]) * app->quad_list.capacity;
+    app->instance_mapped_array =
+        ARENA_PUSH_ARRAY(app->vulkan_arena, instance_size, u8);
+
+    if (!create_buffer(app, instance_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       VK_SHARING_MODE_EXCLUSIVE, 0, 0, &app->instance_buffer,
+                       &app->instance_memory)) {
+      return false;
+    }
+
+    // TODO(melvil): maybe create a x2 buffer to swap without race condition
+    VKTRY(vkMapMemory(app->device, app->instance_memory, 0, instance_size, 0,
+                      &app->instance_mapped_array),
+          "Vulkan error: Failed to map memory for vertex buffer");
+    arena_temp_end(temp);
+  }
+
+  // Descriptor
+
+  // @buffer (uniform)
+  {
+    VkDeviceSize uniform_size = sizeof(UniformBufferObject);
+
+    app->uniform_buffers =
+        ARENA_PUSH_ARRAY(app->vulkan_arena, app->inflight_count, VkBuffer);
+    app->uniform_memories = ARENA_PUSH_ARRAY(
+        app->vulkan_arena, app->inflight_count, VkDeviceMemory);
+    app->uniform_mapped_arrays =
+        ARENA_PUSH_ARRAY(app->vulkan_arena, app->inflight_count, void *);
+
+    for (u32 i = 0; i < app->inflight_count; i++) {
+      create_buffer(app, uniform_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    VK_SHARING_MODE_EXCLUSIVE, 0, NULL,
+                    &app->uniform_buffers[i], &app->uniform_memories[i]);
+      VKTRY(vkMapMemory(app->device, app->uniform_memories[i], 0, uniform_size,
+                        0, &app->uniform_mapped_arrays[i]),
+            "Vulkan error: Failed to map memory for uniform buffer");
+    }
+  }
+
+  // @sync object
+  {
+    app->image_available_semas =
+        ARENA_PUSH_ARRAY(app->vulkan_arena, app->inflight_count, VkSemaphore);
+    app->draw_fences =
+        ARENA_PUSH_ARRAY(app->vulkan_arena, app->inflight_count, VkFence);
+    for (u32 i = 0; i < app->inflight_count; i++) {
+      VKTRY(vkCreateSemaphore(
+                app->device,
+                &(VkSemaphoreCreateInfo){
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                },
+                NULL, &app->image_available_semas[i]),
+            "Vulkan error: Failed to create present semaphore");
+      VKTRY(vkCreateFence(app->device,
+                          &(VkFenceCreateInfo){
+                              .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                              .flags = VK_FENCE_CREATE_SIGNALED_BIT},
+                          NULL, &app->draw_fences[i]),
+            "Vulkan error: Failed to create draw fence");
+    }
+    app->render_finish_semas = ARENA_PUSH_ARRAY(
+        app->vulkan_arena, app->swapchain_images_count, VkSemaphore);
+    for (u32 i = 0; i < app->swapchain_images_count; i++) {
+      VKTRY(vkCreateSemaphore(
+                app->device,
+                &(VkSemaphoreCreateInfo){
+                    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                },
+                NULL, &app->render_finish_semas[i]),
+            "Vulkan error: Failed to create a render semaphore");
+    }
+  }
+
+  return true;
+}
+
 static void rd_cleanup(Application *app) {
   Renderer rd = app->renderer;
   //  if (app->device != VK_NULL_HANDLE)
