@@ -6,7 +6,7 @@ BUILD_DIR="./build"
 HOST_EXEC="app"
 LIB_NAME="libapp.so"
 
-COMMON_LIBS="" #-lm -lglfw -lvulkan
+COMMON_LIBS="-lvulkan -lglfw -ldl"
 
 SUBCMD="${1:-all}"
 MODE="${2:-debug}"
