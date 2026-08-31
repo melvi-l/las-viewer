@@ -1,3 +1,4 @@
+#define BASE_IMPLEMENTATION
 #include "common/api.h"
 #include <cstdio>
 

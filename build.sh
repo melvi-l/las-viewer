@@ -14,10 +14,10 @@ MODE="${2:-debug}"
 cflags_for_mode() {
   case "$1" in
     debug)
-      echo "-g3 -O0 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -DHOT_RELOAD" # -DDEBUG -DVK_ENABLE_VALIDATION 
+      echo "-g3 -O0 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wno-missing-field-initializers -DVK_ENABLE_VALIDATION -DHOT_RELOAD" # -DDEBUG -DVK_ENABLE_VALIDATION 
       ;;
     debug-sanitize)
-      echo "-g3 -O0 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -fanalyzer -fsanitize=address,undefined -fno-omit-frame-pointer -DDEBUG -DVK_ENABLE_VALIDATION -DHOT_RELOAD"
+      echo "-g3 -O0 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wno-missing-field-initializers -DVK_ENABLE_VALIDATION -fanalyzer -fsanitize=address,undefined -fno-omit-frame-pointer -DDEBUG -DVK_ENABLE_VALIDATION -DHOT_RELOAD"
       ;;
     release)
       echo "-O2 -DNDEBUG"

@@ -1,82 +1,37 @@
+#define BASE_IMPLEMENTATION
 #include "common/api.h"
-#include <cstdio>
-#include <cstdlib>
-#include <ctime>
-#include <dlfcn.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-typedef LibAPI (*LibGetApiFn)(void);
-typedef struct Reload {
-  const char *path;
-  void *handle;
-  LibAPI api;
-  time_t last_mtime;
-} Reload;
+#include "host/reload.cpp"
+static Reload r = {};
 
-bool r_load(Reload *r, Application *app) {
-  r->handle = dlopen(r->path, RTLD_NOW | RTLD_LOCAL);
-  if (r->handle == NULL) {
-    fprintf(stderr, "reload: dlopen failed: %s\n", dlerror());
-    return false;
-  }
+#include "vulkan.cpp"
 
-  LibGetApiFn lib_get_api = (LibGetApiFn)dlsym(r->handle, "lib_get_api");
-  if (lib_get_api == NULL) {
-    fprintf(stderr, "reload: lib_get_api missing: %s\n", dlerror());
-    dlclose(r->handle);
-    r->handle = NULL;
-    return false;
-  }
+void init(Application *app) {
+  app->scratch = arena_create(ARENA_DEFAULT_BLOCK_SIZE);
 
-  r->api = lib_get_api();
-  r->api.load(app);
-  return true;
+  printf("Hello, Host !\n");
+  r.path = "build/libapp.so", r_init(&r, app);
+
+  rd_init(app);
+  rd_create_instance(app);
 }
 
-bool r_init(Reload *r, Application *app) {
-  struct stat st;
-  if (stat(r->path, &st) != 0)
-    return false;
-  r->last_mtime = st.st_mtime;
-  return r_load(r, app);
+void destroy(Application *app) {
+  (void)app;
+  printf("Goodbye, Host !\n");
 }
 
-bool r_poll(Reload *r, Application *app) {
-  printf("poll\n");
-  struct stat st;
-  if (stat(r->path, &st) != 0)
-    return false;
-  if (st.st_mtime == r->last_mtime)
-    return false;
-
-  printf("change %p\n", (void *)r->api.load);
-  r->api.unload(app);
-  dlclose(r->handle);
-  r->handle = NULL;
-  r->last_mtime = st.st_mtime;
-
-  usleep(50000); // 50ms
-  printf("reload: detected change, reloading %s\n", r->path);
-
-  return r_load(r, app);
+void update(Application *app) {
+  r_poll(&r, app);
+  r.api.update(NULL);
 }
 
 int main() {
-  printf("Hello, Host !\n");
-
   Application app = {};
-
-  Reload r = {};
-  r.path = "build/libapp.so";
-
-  r_init(&r, &app);
-
+  init(&app);
   for (;;) {
-    r_poll(&r, &app);
-    r.api.update(NULL);
-    sleep(1);
+    update(&app);
   }
-  printf("Goodbye, Host !\n");
+  destroy(&app);
   return 0;
 }

@@ -1,7 +1,7 @@
 [
   {
     "directory": "/home/mmiglio/Documents/CODES/point-cloud-viewer/",
-    "command": "cc -Isrc src/lib/app.c -o /dev/null",
+    "command": "cc -Isrc -Iexternal src/lib/app.c -o /dev/null",
     "file": "src/lib/app.c"
   }
 ]
