@@ -25,6 +25,7 @@ void init(Application *app) {
     rd_create_logical_device(&app->renderer);
     rd_create_swapchain(&app->renderer, plat_api, app->scratch);
     rd_create_frame_context(&app->renderer);
+    rd_create_pipeline(&app->renderer, app->scratch);
 }
 
 void destroy(Application *app) {
@@ -39,6 +40,7 @@ bool update(Application *app) {
     plat_poll_events();
 
     u32 image_index = rd_begin_frame(&app->renderer);
+    rd_render_triangle(&app->renderer);
     rd_end_frame(&app->renderer, image_index);
     r.api.update(NULL);
     return true;

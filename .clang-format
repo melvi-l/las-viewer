@@ -1,0 +1,19 @@
+BasedOnStyle: LLVM
+
+# Ne jamais forcer de retour à la ligne selon la longueur
+ColumnLimit: 0
+
+# Indentation simple
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+
+# Évite certains réarrangements agressifs
+BinPackArguments: false
+BinPackParameters: false
+
+# Garde plus facilement les expressions courtes sur une ligne
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true

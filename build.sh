@@ -45,6 +45,20 @@ build_lib() {
   printf '[lib]     built %s (%s, %ds)\n' "$LIB_NAME" "$MODE" "$((SECONDS - t0))"
 }
 
+build_shaders() {
+  mkdir -p "$BUILD_DIR/shaders"
+  local count=0
+  for shader in "$SRC_DIR"/shaders/*.slang; do
+    [ -e "$shader" ] || continue
+    out="$BUILD_DIR/shaders/$(basename "${shader%.slang}").spv"
+    slangc "$shader" -target spirv -profile spirv_1_4 \
+      -emit-spirv-directly -fvk-use-entrypoint-name \
+      -entry vertexMain -entry fragmentMain -o "$out"
+    count=$((count + 1))
+  done
+  printf '[shaders] compiled %d shader(s)\n' "$count"
+}
+
 run_host() {
   printf '[run]     %s\n' "$HOST_EXEC"
   "$BUILD_DIR/$HOST_EXEC"
@@ -56,6 +70,7 @@ case "$SUBCMD" in
   all)
     build_host
     build_lib
+    build_shaders
     run_host
     ;;
   build)
@@ -67,6 +82,9 @@ case "$SUBCMD" in
     ;;
   lib)
     build_lib
+    ;;
+  shaders) 
+    build_shaders
     ;;
   run)
     run_host

@@ -29,6 +29,11 @@ typedef struct RdFrameContext {
     VkSemaphore acquire_sema;
 } RdFrameContext;
 
+typedef struct RdPipeline {
+    VkPipeline handle;
+    VkPipelineLayout layout;
+} RdPipeline;
+
 typedef struct Renderer {
     Arena *arena;
     VkInstance instance;
@@ -45,4 +50,5 @@ typedef struct Renderer {
     u32 frame_index;
     RdFrameContext *frames;
 
+    RdPipeline pipeline;
 } Renderer;

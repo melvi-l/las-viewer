@@ -11,3 +11,5 @@ vim.keymap.set('n', '<leader>g', function() run_build('all', 'all') end,
     { desc = 'Full build + run', silent = true })
 vim.keymap.set('n', '<leader>l', function() run_build('lib', 'lib') end,
     { desc = 'Hot reload lib', silent = true })
+vim.keymap.set('n', '<leader>s', function() run_build('shader', 'shader') end,
+    { desc = 'Hot reload shader', silent = true })

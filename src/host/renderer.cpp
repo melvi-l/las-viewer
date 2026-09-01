@@ -446,6 +446,127 @@ static bool rd_create_frame_context(Renderer *rd) {
     return true;
 }
 
+static bool rd_create_pipeline(Renderer *rd, Arena *scratch) {
+    ArenaTemp temp = arena_temp_begin(scratch);
+    RdPipeline p = {};
+
+    Str shader_code = {0};
+    read_file(temp.arena, S("./build/shaders/triangle.spv"), &shader_code);
+    if (NEVER(shader_code.length % 4 != 0)) {
+        fprintf(stderr, "Shader byte code is not multiple of 4\n");
+        return false;
+    }
+    VkShaderModule shader_module;
+    VkShaderModuleCreateInfo createInfo = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = shader_code.length,
+        .pCode = (const u32 *)shader_code.data};
+    VKTRY(vkCreateShaderModule(rd->device, &createInfo, NULL, &shader_module),
+          "Vulkan error: Failed to create shader module");
+    VkPipelineShaderStageCreateInfo vertex_stage_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = shader_module,
+        .pName = "vertexMain"};
+    VkPipelineShaderStageCreateInfo fragment_stage_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = shader_module,
+        .pName = "fragmentMain"};
+    VkPipelineShaderStageCreateInfo shader_stages[] = {vertex_stage_info, fragment_stage_info};
+
+    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = 2,
+        .pDynamicStates = dynamic_states};
+
+    // VkVertexInputBindingDescription bindings[] = {};
+    // VkVertexInputAttributeDescription attributes[] = {};
+    VkPipelineVertexInputStateCreateInfo vertex_input_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        // .vertexBindingDescriptionCount = __,
+        // .pVertexBindingDescriptions = bindings,
+        //.vertexAttributeDescriptionCount = __,
+        // .pVertexAttributeDescriptions = attributes,
+    };
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+
+    VkPipelineViewportStateCreateInfo viewport_state = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .scissorCount = 1};
+
+    VkPipelineRasterizationStateCreateInfo raterizer = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .rasterizerDiscardEnable = false,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .lineWidth = 1.0f};
+
+    VkPipelineMultisampleStateCreateInfo multisampling = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+
+    VkPipelineColorBlendAttachmentState color_blend_attachment = {
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT};
+    VkPipelineColorBlendStateCreateInfo color_blend_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment};
+
+    if (rd->pipeline.layout == VK_NULL_HANDLE) {
+        VkPipelineLayoutCreateInfo pipeline_layout_info = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            // .setLayoutCount = 1,
+            // .pSetLayouts = &app->descriptor_set_layout,
+            .pushConstantRangeCount = 0};
+        VKTRY(vkCreatePipelineLayout(rd->device, &pipeline_layout_info, NULL, &p.layout),
+              "Vulkan error: Failed to create pipeline layout");
+        printf("[VK]::PipelineLayout\n");
+    } else {
+        printf("[VK] recreating pipeline layout...\n");
+    }
+    VkPipelineRenderingCreateInfo pipeline_rendering_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &rd->swapchain.surface_format.format};
+    VkGraphicsPipelineCreateInfo pipeline_info = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &pipeline_rendering_info,
+        .stageCount = 2,
+        .pStages = shader_stages,
+        .pVertexInputState = &vertex_input_info,
+        .pInputAssemblyState = &input_assembly_info,
+        .pViewportState = &viewport_state,
+        .pRasterizationState = &raterizer,
+        .pMultisampleState = &multisampling,
+        .pColorBlendState = &color_blend_info,
+        .pDynamicState = &dynamic_state,
+        .layout = p.layout,
+        .renderPass = NULL,
+    };
+    if (rd->pipeline.handle != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(rd->device);
+        vkDestroyPipeline(rd->device, p.handle, NULL);
+        printf("[VK] recreating pipeline...\n");
+    } else {
+        printf("[VK]::Pipeline\n");
+    }
+
+    VKTRY(vkCreateGraphicsPipelines(rd->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &p.handle),
+          "Vulkan error: Failed to create graphics pipeline");
+    vkDestroyShaderModule(rd->device, shader_module, NULL);
+
+    rd->pipeline = p;
+    arena_temp_end(temp);
+    return true;
+}
+
 void transition_image_layout(VkCommandBuffer command_buffer, VkImage image, VkImageLayout old_layout, VkImageLayout new_layout, VkAccessFlags2 src_access_mask, VkAccessFlags2 dst_access_mask, VkPipelineStageFlags2 src_stage_mask, VkPipelineStageFlags2 dst_stage_mask, u32 src_queue_family_index, u32 dst_queue_family_index, VkImageAspectFlagBits image_aspect);
 static u32 rd_begin_frame(Renderer *rd) {
     RdFrameContext *frame = &rd->frames[rd->frame_index];
@@ -484,7 +605,7 @@ static u32 rd_begin_frame(Renderer *rd) {
       .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
       .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
       .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-      .clearValue = {.color = {.float32 = {1.f, 0.f, 0.f, 1.f}}}};
+      .clearValue = {.color = {.float32 = {0.f, 0.f, 0.f, 1.f}}}};
     VkRenderingInfo rendering_info = {
       .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
       .renderArea = {.offset = {0, 0}, .extent = rd->swapchain.extent},
@@ -495,6 +616,20 @@ static u32 rd_begin_frame(Renderer *rd) {
     vkCmdBeginRendering(*cmd_buffer, &rendering_info);
 
     return image_index;
+}
+
+static bool rd_render_triangle(Renderer *rd) {
+    VkCommandBuffer *cmd_buffer = &rd->frames[rd->frame_index].cmd_buffer;
+
+    vkCmdBindPipeline(*cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rd->pipeline.handle);
+
+    VkViewport vp = {0., 0., (f32)rd->swapchain.extent.width, (f32)rd->swapchain.extent.width, 0., 1.};
+    VkRect2D scissor = {{0, 0}, rd->swapchain.extent};
+    vkCmdSetViewport(*cmd_buffer, 0., 1., &vp);
+    vkCmdSetScissor(*cmd_buffer, 0., 1., &scissor);
+
+    vkCmdDraw(*cmd_buffer, 3, 1, 0, 0);
+    return true;
 }
 
 static bool rd_end_frame(Renderer *rd, u32 image_index) {
