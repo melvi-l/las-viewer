@@ -1,7 +1,6 @@
 #include "common/base.h"
 #include "common/common.h"
 #include "host/plateform.h"
-#include <cstdio>
 #include <vulkan/vulkan_core.h>
 
 #define MAX_FRAMES_IN_FLIGHT 2
@@ -224,6 +223,7 @@ static bool rd_create_queue(Renderer *rd, Arena *scratch) {
     // TODO transfer queue
 }
 
+// @logical
 static bool rd_create_logical_device(Renderer *rd) {
     f32 queue_priority = 1.f;
     VkDeviceQueueCreateInfo device_queue_info[2] = {
@@ -459,6 +459,75 @@ static bool rd_create_frame_context(Renderer *rd) {
     return true;
 }
 
+// @buffer
+bool find_memory_type(VkPhysicalDevice physical_device, u32 type_filter, VkMemoryPropertyFlags properties, u32 *out_memory_type_index) {
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+    for (u32 i = 0; i < memory_properties.memoryTypeCount; i++) {
+        bool supported = (type_filter & (1u << i)) != 0;
+        bool has_property = (memory_properties.memoryTypes[i].propertyFlags & properties) == properties;
+        if (supported && has_property) {
+            *out_memory_type_index = i;
+            return true;
+        }
+    }
+    return false;
+}
+bool create_buffer(VkDevice device, VkPhysicalDevice physical_device, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkSharingMode sharing_mode, u32 queue_family_index_count, const u32 *p_queue_family_indices, VkBuffer *buffer, VkDeviceMemory *memory) {
+    VkBufferCreateInfo buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage,
+        .sharingMode = sharing_mode,
+        .queueFamilyIndexCount = queue_family_index_count,
+        .pQueueFamilyIndices = p_queue_family_indices};
+    VKTRY(vkCreateBuffer(device, &buffer_info, NULL, buffer),
+          "Vulkan error: Failed to create vertex buffer");
+
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, *buffer, &memory_requirements);
+    u32 memory_type_index;
+    if (!find_memory_type(physical_device, memory_requirements.memoryTypeBits, properties, &memory_type_index)) {
+        fprintf(stderr, "[VK] Unable to find adequate memory type index.\n");
+        return false;
+    }
+
+    VkMemoryAllocateInfo memory_allocate_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memory_requirements.size,
+        .memoryTypeIndex = (u32)memory_type_index};
+    VKTRY(vkAllocateMemory(device, &memory_allocate_info, NULL, memory),
+          "Vulkan error: Failed to allocate vertex buffer memory");
+    VKTRY(vkBindBufferMemory(device, *buffer, *memory, 0),
+          "Vulkan error: unable to bind buffer memory");
+    return true;
+}
+static bool rd_create_point_buffer(Renderer *rd, u64 count, u32 element_size) {
+    RdHostBuffer buffer = {};
+    buffer.count = count;
+    buffer.size = count * element_size;
+
+    if (!create_buffer(
+            rd->device,
+            rd->physical_device,
+            buffer.size,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            VK_SHARING_MODE_EXCLUSIVE,
+            0,
+            NULL,
+            &buffer.handle,
+            &buffer.memory)) {
+        return false;
+    };
+    VKTRY(vkMapMemory(rd->device, buffer.memory, 0, buffer.size, 0, &buffer.mapped_memory),
+          "[VK] Unable to map memory");
+
+    rd->point_buffer = buffer;
+    return true;
+}
+
+// @pipeline
 static bool rd_create_pipeline(Renderer *rd, Arena *scratch) {
     ArenaTemp temp = arena_temp_begin(scratch);
     RdPipeline p = {};
@@ -495,13 +564,26 @@ static bool rd_create_pipeline(Renderer *rd, Arena *scratch) {
         .pDynamicStates = dynamic_states};
 
     // VkVertexInputBindingDescription bindings[] = {};
-    // VkVertexInputAttributeDescription attributes[] = {};
+    VkVertexInputBindingDescription bindings[] = {{
+        .binding = 0,
+        .stride = sizeof(Point),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    }};
+    VkVertexInputAttributeDescription attributes[] = {
+        {.location = 0,
+         .binding = 0,
+         .format = VK_FORMAT_R16G16B16_SINT,
+         .offset = offsetof(Point, x)},
+        {.location = 1,
+         .binding = 0,
+         .format = VK_FORMAT_R8G8B8A8_UINT,
+         .offset = offsetof(Point, rgba)}};
     VkPipelineVertexInputStateCreateInfo vertex_input_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        // .vertexBindingDescriptionCount = __,
-        // .pVertexBindingDescriptions = bindings,
-        //.vertexAttributeDescriptionCount = __,
-        // .pVertexAttributeDescriptions = attributes,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = bindings,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = attributes,
     };
     VkPipelineInputAssemblyStateCreateInfo input_assembly_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -591,6 +673,7 @@ static bool rd_init(Renderer *rd, PlatformApi plat_api, Arena *scratch) {
            rd_create_logical_device(rd) &&
            rd_create_swapchain(rd, plat_api, scratch) &&
            rd_create_frame_context(rd) &&
+           rd_create_point_buffer(rd, max_point_count, sizeof(Point)) &&
            rd_create_pipeline(rd, scratch);
 }
 
@@ -658,10 +741,12 @@ static bool rd_update(Renderer *rd, PlatformApi plat_api, Arena *scratch) {
     return true;
 }
 
-static bool rd_render_triangle(Renderer *rd) {
+static bool rd_render_cloud(Renderer *rd) {
     VkCommandBuffer *cmd_buffer = &rd->frames[rd->frame_index].cmd_buffer;
 
     vkCmdBindPipeline(*cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rd->pipeline.handle);
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(*cmd_buffer, 0, 1, &rd->point_buffer.handle, offsets);
 
     VkViewport vp = {0., 0., (f32)rd->swapchain.extent.width, (f32)rd->swapchain.extent.height, 0., 1.};
     VkRect2D scissor = {{0, 0}, rd->swapchain.extent};

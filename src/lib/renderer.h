@@ -34,6 +34,16 @@ typedef struct RdPipeline {
     VkPipelineLayout layout;
 } RdPipeline;
 
+typedef struct RdHostBuffer {
+    VkBuffer handle;
+    VkDeviceMemory memory;
+
+    u64 count;
+    VkDeviceSize size;
+
+    void *mapped_memory;
+} RdHostBuffer;
+
 typedef struct Renderer {
     bool is_init;
 
@@ -52,6 +62,8 @@ typedef struct Renderer {
     u32 inflight_count;
     u32 frame_index;
     RdFrameContext *frames;
+
+    RdHostBuffer point_buffer;
 
     RdPipeline pipeline;
 } Renderer;

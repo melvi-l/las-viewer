@@ -86,6 +86,7 @@ static inline size_t align_up(size_t value, size_t alignment) {
 }
 
 static inline ArenaBlock *arena_block_create(size_t min_size) {
+    assert(min_size > 0);
     ArenaBlock *block = (ArenaBlock *)malloc(sizeof(ArenaBlock) + min_size);
     if (!block) {
         perror("arena block creation");
