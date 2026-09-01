@@ -5,7 +5,7 @@
 #include "base.h"
 
 #include "host/plateform.h"
-#include "host/renderer.h"
+#include "lib/renderer.h"
 
 typedef struct Application {
     Arena *scratch;

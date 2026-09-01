@@ -35,6 +35,8 @@ typedef struct RdPipeline {
 } RdPipeline;
 
 typedef struct Renderer {
+    bool is_init;
+
     Arena *arena;
     VkInstance instance;
     VkSurfaceKHR surface;
@@ -44,6 +46,7 @@ typedef struct Renderer {
     RdQueue present_queue;
     VkDevice device;
 
+    Size framebuffer_size;
     RdSwapchain swapchain;
 
     u32 inflight_count;

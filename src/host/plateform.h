@@ -6,58 +6,31 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-typedef void (*PlatResizeCallback)(u32 width, u32 height, void *user_data);
-typedef void (*PlatCharCallback)(u32 c, void *user_data);
-typedef void (*PlatKeyCallback)(i32 key, i32 scancode, i32 action, i32 mods, void *user_data);
-
-typedef enum {
-    PLAT_MOUSE_MOVE,
-    PLAT_MOUSE_BUTTON,
-    PLAT_MOUSE_SCROLL,
-    PLAT_MOUSE_ENTER,
-} PlatMouseKind;
-
-typedef struct {
-    PlatMouseKind kind;
-    union {
-        struct {
-            f64 x, y;
-        } move;
-        struct {
-            i32 button, action, mods;
-        } button;
-        struct {
-            f64 xoff, yoff;
-        } scroll;
-        struct {
-            bool entered;
-        } enter;
-    } u;
-} PlatMouseEvent;
-
-typedef void (*PlatMouseCallback)(const PlatMouseEvent *ev, void *user_data);
-
-typedef GLFWwindow PlatWindow;
-typedef struct {
-    PlatWindow *window;
-
-    void *user_data;
-} Platform;
-
 // @platform-vulkan
 typedef struct PlatformApi {
-    Platform *context;
+    void *context;
 
     const char **(*get_required_instance_extensions)(
-      void *platform,
-      u32 *count);
+        void *platform,
+        u32 *count);
 
-    void (*get_framebuffer_size)(void *platform, u32 *width, u32 *height);
+    Size (*get_framebuffer_size)(void *platform);
 
     VkResult (*create_surface)(
-      void *platform,
-      VkInstance instance,
-      VkSurfaceKHR *surface);
+        void *platform,
+        VkInstance instance,
+        VkSurfaceKHR *surface);
 } PlatformApi;
+
+typedef GLFWwindow PlatWindow;
+typedef Size PlatFramebufferSize;
+typedef struct {
+    PlatWindow *window;
+    PlatFramebufferSize framebuffer_size;
+
+    void *user_data;
+
+    PlatformApi api;
+} Platform;
 
 #endif // PLATFORM_H

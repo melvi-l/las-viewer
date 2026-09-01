@@ -144,6 +144,11 @@ static inline bool arena_try_stitch(Arena *arena, void *ptr, u64 size, u64 grow)
 #define ARENA_PUSH_ARRAY(arena, count, type) \
     (type *)arena_alloc_zero(arena, count, sizeof(type))
 
+// @utils
+typedef struct Size {
+    u32 width, height;
+} Size;
+
 // @str
 typedef struct {
     u8 *data;
@@ -332,7 +337,7 @@ static inline u64 str_deserialized(Str str, u64 off, void *read_dst, u64 read_si
     u64 byte_left = str.length - MIN(off, str.length);
     u64 actually_readable_size = MIN(read_size, byte_left);
     u64 legally_readable_size =
-      actually_readable_size - actually_readable_size % granularity;
+        actually_readable_size - actually_readable_size % granularity;
     if (legally_readable_size > 0) {
         memcpy(read_dst, str.data + off, legally_readable_size);
     }
